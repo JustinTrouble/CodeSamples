@@ -1,1 +1,813 @@
 
+*JUSTIN GOHLKE 
+ * master control for all Card Based game aspects. should handle just about everything
+ * or at minimum, try to. You must Reference the Card_DB to actual Play card prefabs.
+ * this system uses a substitutionary behavior to avoid dealing with the unwieldly
+ * CardGameObjects, until it is such a time to play the cards proper
+ * CONTAINS:
+ *  Functions to build,save, modify decks
+ *  functions for the Card_Management_PC Scene control
+ *  Object Classes for Card Substitutions, Decks, Deck Collections, Card Stashes, Play hand and dealt Hands
+ */
+
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine.UI;
+using System.IO;
+using UnityEngine;
+
+public class Card_System : MonoBehaviour
+{
+    /*Things we will need
+        *     (need an account system eventually, will use a
+     *      "single account" at the moment until we can make a DB for it)
+     *  6. apply cards to attach to buildings
+     */
+    // cardAttachmentLocation (set of city management coords) handled by rounds menu i guess?
+    //CLASSES-------CLASSES-------------CLASSES----------------------CLASSES--------------CLASSES-------
+    //contains a list of every CardSub in ownership atm (05 May 2017) its low priority for implementation
+    public class StashCollection
+    {
+        public List<CardSubs> stashCards;
+        //construct a stash using raw cards
+        public StashCollection(List<CardSubs> inputCards)
+        {
+            stashCards = new List<CardSubs>();
+            stashCards.AddRange(inputCards);
+        }
+    }
+    // container for all possessed decks
+    public class DeckCollection
+    {
+        int maxDecks = 10;
+        public List<DeckOfCards> Decks;
+
+        public DeckCollection(List<DeckOfCards> inputDecks)
+        {
+            Decks = new List<DeckOfCards>();
+            Decks.AddRange(inputDecks);
+        }
+        public List<string> getAllDeckNames()
+        {
+            List<string> namesCollected = new List<string>();
+            foreach (DeckOfCards deck in Decks)
+            {
+                namesCollected.Add(deck.deckName);
+            }
+            return namesCollected;
+        }
+    }
+    // container for a deck of cards (Cardsubs)
+    // dont you already have external functions for some of these?
+    // using these internals for debug only then
+    public class DeckOfCards
+    {
+        public string deckName;  // specified instance will take care of this?
+        public uint DeckID;
+        public static uint maxCards = 20;
+        public List<CardSubs> DeckCards;
+        public DeckOfCards()
+        {
+            deckName = "Blank";
+            DeckID = 255;
+            DeckCards = new List<CardSubs>();
+
+        }
+
+        public DeckOfCards(DeckOfCards inputDeck)
+        {
+            deckName = inputDeck.deckName;
+            DeckID = inputDeck.DeckID;
+            DeckCards = new List<CardSubs>();
+            DeckCards.AddRange(inputDeck.DeckCards);
+        }
+        //full constructor 
+        public DeckOfCards(string name, uint ID, List<CardSubs> cardlist)
+        {
+            deckName = name;
+            DeckID = ID;
+            DeckCards = new List<CardSubs>();
+            DeckCards.AddRange(cardlist);
+        }
+    }
+    //Substituationary card values, these can act as means of calling the real cards 
+    public class CardSubs
+    {
+        public uint cardID;
+        public uint numberofDuplicates;
+        public uint numberDiscarded;
+
+        //should note the third item is kinda pointless for this constructor
+        //with IO, but likely will be needed elsewhere
+        public CardSubs(uint ID, uint duplicates, uint discarded)
+        {
+            cardID = ID;
+            numberofDuplicates = duplicates;
+            numberDiscarded = discarded;
+        }
+    }
+
+    //the cards possess during action phases
+    public class PlayHand
+    {
+        public static uint maxCardsInHand = 4;
+        public List<CardSubs> cardsInHand;// might need to adjust for card objects due to mid play time reactions
+    }
+
+    //cards recieved out of your deck for a match during the rounds Menu
+    public class DealtCards
+    {
+        public static int arrayLength = 4;//reference point so we dont have to recode if we change this
+        public CardSubs[] cardsInDeal = new CardSubs[4];
+        
+        public DealtCards(DealtCards inputDeal)
+        {
+            cardsInDeal = inputDeal.cardsInDeal;
+        }
+        public DealtCards()
+        {
+
+        }
+        
+    }
+
+    //FUNCTIONS--------------------FUNCTIONS-----------------------FUNCTIONS-------------FUNCTIONS--------
+
+    //Operand commands tied into deck management Scene GUI, and general usage 
+    //will need to adjust this for specifics of deck ID
+
+
+    /// <summary>
+    /// we currently have the Filepath hardcoded, apply the deck ID to yank it from file. \n Returns a DeckOfCards class object
+    /// </summary>
+    /// <param name="deckID">
+    /// this is simply the decks ID number, we cannot look up via deck name atm
+    /// </param>
+    /// <returns></returns>
+    public static DeckOfCards LoadDeckFromFile(uint deckID)
+    {
+        //file path is usually PlayerDataFiles/Deck + deckID
+
+        //find deck, save as text
+        string rawDeckFromFile = Game_Controller.ReadDeckFromFile("PlayerDataFiles/DeckInfo" + deckID + ".txt");
+
+        // split text up based on delination of ','
+        char seperator = ',';
+        string[] parsedDeck = rawDeckFromFile.Split(seperator);
+
+        // loader for decks, storage medium
+        List<CardSubs> cardSubsLoader = new List<CardSubs>();
+
+        //we start at position 2 because position 0 and 1 are deck info
+        // data is read in at 3 part chunks, subtract 3 from deck to parse, incremement mid loop to maintain proper feed in
+        // inclusion of the third value is for techincal reasons but will likely alwyas be zero
+        for (int i = 2; i < parsedDeck.Length - 3; i++)
+        {
+            //this is so stupid and i wish i had a better solution
+            uint cardID = (uint)Convert.ToDouble(parsedDeck[i]);
+            i++;
+            uint number = (uint)Convert.ToDouble(parsedDeck[i]);
+            i++;
+            uint discarded = (uint)Convert.ToDouble(parsedDeck[i]);
+
+            CardSubs cardLoad = new CardSubs(cardID, number, discarded);
+            cardSubsLoader.Add(cardLoad);
+        }
+        // create new deckofCards using the information
+
+        DeckOfCards generatedDeck = new DeckOfCards(parsedDeck[0], (uint)Convert.ToDouble(parsedDeck[1]), cardSubsLoader);
+        //Debug.Log("Total card count is " + generatedDeck.DeckCards.Count);
+        foreach (CardSubs card in generatedDeck.DeckCards)
+        {
+            //Debug.Log("Card " + card.cardID + " has " + card.numberofDuplicates);
+        }
+        return generatedDeck;
+    }
+
+    public static List<DeckOfCards> LoadAllDecksFromFile()
+    {
+        string rawDeckNumber = Game_Controller.ReadDeckFromFile("PlayerDataFiles/DeckCount.txt");
+        //Debug.Log(rawDeckNumber);
+        char seperator = ',';
+        string[] rawDeckNumberParse = rawDeckNumber.Split(seperator);
+        uint totalDecks;
+        try
+        {
+            totalDecks = (uint)Convert.ToDouble(rawDeckNumberParse[0]);
+        }
+        catch (InvalidCastException)
+        {
+            Debug.Log("failed to load in decks, error reading DeckCount.txt. setting deck count to zero");
+            totalDecks = 0;
+        }
+
+        // Debug.Log("(Card_System_Manager) Number value pulled from rawDeckNumberParse: " + totalDecks);
+
+        List<DeckOfCards> DeckContainer = new List<DeckOfCards>();
+
+        for (uint i = 0; i <= totalDecks; i++)
+        {
+            DeckOfCards deckLoad = LoadDeckFromFile(i);
+            DeckContainer.Add(deckLoad);
+        }
+
+        return DeckContainer;
+    }
+
+    public static List<CardSubs> LoadStashCollection()
+    {
+        
+        string rawStashFromFile = Game_Controller.ReadDeckFromFile("PlayerDataFiles/CardStash.txt");
+
+        // split text up based on delination of ','
+        char seperator = ',';
+        string[] parsedCollection = rawStashFromFile.Split(seperator);
+
+        // loader for decks, storage medium
+        List<CardSubs> cardSubsLoader = new List<CardSubs>();
+
+        for (int i = 0; i < parsedCollection.Length - 3; i++)
+        {
+            //this is so stupid and i wish i had a better solution
+            uint cardID = (uint)Convert.ToDouble(parsedCollection[i]);
+            i++;
+            uint number = (uint)Convert.ToDouble(parsedCollection[i]);
+            i++;
+            uint discarded = (uint)Convert.ToDouble(parsedCollection[i]);
+
+            CardSubs cardLoad = new CardSubs(cardID, number, discarded);
+            cardSubsLoader.Add(cardLoad);
+        }
+
+        return cardSubsLoader;
+    }
+    //write deck to PlayerID account, along with files
+    public static void SaveDeck(int inputDeckID, DeckCollection DeckCollectionInput)
+    {
+        //should i write in a check to make sure the deck saved is the active deck?
+        Debug.Log("saving Deck to file, Deck Num id is: " + inputDeckID);
+        //find deck, save as text
+        string deckAddress = ("PlayerDataFiles/DeckInfo" + inputDeckID + ".txt");
+
+        Game_Controller.WriteDeckToFile(deckAddress, inputDeckID, DeckCollectionInput);
+    }
+    //specific to the card system saving
+    public static void SaveActiveDeckToFile(DeckOfCards activeDeckInput, DeckCollection deckCollectionInput)
+    {
+        SaveDeck((int)activeDeckInput.DeckID, deckCollectionInput);
+
+    }
+    //quick error catch for lacking ANY deck. (NOTE Cyrus) we will need to review this after adding in the ability to delete and create decks
+    public static void NoDeckCheck()
+    {
+        string playerDataPath = "PlayerDataFiles/";
+        if (!Game_Controller.CheckForDeck(playerDataPath + "DeckInfo0.txt"))
+        {
+            Debug.Log("No player content found, Generating new stuff");
+            Game_Controller.WriteDefaultDeck(playerDataPath + "DeckInfo0.txt");
+        }
+    }
+    //Pull decks from the active holding container
+    public void PullDecks()
+    {
+
+    }
+    //is deck wthin minimum and maximum card numbers?, run concurrent with add card
+    public void ValidateDeck()
+    {
+
+    }
+    //check if card violates max per deck
+    public void ValidateCard()
+    {
+
+    }
+    public void UpdateDeck()
+    {
+
+    }
+
+    //Deck Management Function
+    public static void MoveStashCardToDeck(uint inputArrayLocation, StashCollection inputStashCollection, DeckOfCards inputActiveDeck)
+    {
+        //generate a local copy of the ID
+        uint cardID = inputStashCollection.stashCards[(int)inputArrayLocation].cardID;
+
+        //remove or reduce count of that card from the Deck
+        inputStashCollection.stashCards[(int)inputArrayLocation].numberofDuplicates--;
+
+        //Remove card Plate/panel from the line up
+        if (inputStashCollection.stashCards[(int)inputArrayLocation].numberofDuplicates == 0)
+        {
+            inputStashCollection.stashCards.RemoveAt((int)inputArrayLocation);
+        }
+
+        //move a copy to the Deck.
+        bool foundCard = false;
+        //PS:  consider turning the card sub search  into a function, your going to use it a lot.
+        foreach (CardSubs card in inputActiveDeck.DeckCards)
+        {
+            if (card.cardID == cardID)
+            {
+                //add that card to the stash collection
+                card.numberofDuplicates++;
+                foundCard = true;
+                break;
+            }
+        }
+        if (!foundCard) // couldnt find the card, add a new plate
+        {
+            CardSubs newCard = new CardSubs(cardID, 1, 0);
+            inputActiveDeck.DeckCards.Add(newCard);
+        }
+    }
+    //Deck Management Function
+    public static void MoveDeckCardToStash(uint inputArrayLocation, StashCollection inputStashCollection, DeckOfCards inputActiveDeck)
+    {
+
+        uint cardID = inputActiveDeck.DeckCards[(int)inputArrayLocation].cardID;
+
+        inputActiveDeck.DeckCards[(int)inputArrayLocation].numberofDuplicates--;
+
+        if (inputActiveDeck.DeckCards[(int)inputArrayLocation].numberofDuplicates == 0)
+        {
+            inputActiveDeck.DeckCards.RemoveAt((int)inputArrayLocation);
+        }
+
+        //move a copy to the Deck.
+        bool foundCard = false;
+        //PS:  consider turning the card sub search  into a function, your going to use it a lot.
+        foreach (CardSubs card in inputStashCollection.stashCards)
+        {
+            if (card.cardID == cardID)
+            {
+                //add that card to the stash collection
+                card.numberofDuplicates++;
+                foundCard = true;
+                return;
+            }
+        }
+        if (!foundCard)
+        {
+            CardSubs newCard = new CardSubs(cardID, 1, 0);
+            inputStashCollection.stashCards.Add(newCard);
+        }
+
+    }
+    //returns the number of cards in a deck, including duplicates
+
+    public static uint GetCardsCount(DeckOfCards inputDeck)
+    {
+        
+        uint cardCount = 0;
+        // Debug.Log("Name of input Deck:" + inputDeck.deckName);
+        foreach (CardSubs card in inputDeck.DeckCards)
+        {
+            cardCount += card.numberofDuplicates;
+        }
+
+        return cardCount;
+    }
+
+    //generates single copy versions of card subs for gameplay shuffle pulls.
+    public static List<CardSubs> ConvertCardSubsToIndividuals(DeckOfCards InputDeck)
+    {
+
+       // Debug.Log("[DEBUG] : now testing ConvertCardSubsToIndividuals");
+        List<CardSubs> IndividualCards = new List<CardSubs>();
+
+        foreach (CardSubs cards in InputDeck.DeckCards)
+        {
+            if (cards.numberofDuplicates > 0)
+            {
+                for (uint i = cards.numberofDuplicates; i > 0; i--)
+                {
+                    IndividualCards.Add(cards);
+                }
+            }
+        }
+        //Debug.Log("Individual cards size is " + IndividualCards.Count);
+        foreach (CardSubs cards in IndividualCards)
+        {
+            //Debug.Log("ID of " + cards.cardID + " has count of " + cards.numberofDuplicates);
+        }
+        return IndividualCards;
+    }
+
+    //check if input card is at DB checked count maximum
+    public static bool IsCardAtMaxDuplicate(CardSubs inputCard, Card_DB_Manager inputDB)
+    {
+        bool atMax = false;
+        foreach (GameObject card in inputDB.cards)
+        {
+            if (card.GetComponent<Card>().CardID == inputCard.cardID)
+            {
+                if (inputCard.numberofDuplicates >= card.GetComponent<Card>().maxPerDeck)
+                {
+                    atMax = true;
+                }
+                return atMax;
+            }
+        }
+        Debug.Log("[ERROR]: Function isCardAtMaxDuplicate could not find cardID");
+        return atMax;
+    }
+
+    //find out the maximium number of the same card your allowed to have
+    public static uint GetMaxCardDuplicateCount(CardSubs inputCard, Card_DB_Manager inputDB)
+    {
+        uint maxCount = 0;
+        foreach (GameObject card in inputDB.cards)
+        {
+            if (card.GetComponent<Card>().CardID == inputCard.cardID)
+            {
+                maxCount = card.GetComponent<Card>().maxPerDeck;
+                return maxCount;
+            }
+        }
+        Debug.Log("[ERROR]: Function getMaxCardDuplicateCount could not find CardID");
+        return maxCount;
+    }
+
+    //displays the phsyical card without its own canvas
+    public static GameObject GetPhysicalCard(uint inputCardID, Card_DB_Manager inputDB)
+    {
+        //Debug.Log("Attempting to get physical gameobject for card id of " + inputCardID);
+        //if (inputCardID > 2)
+        //{
+        //    inputCardID -= 1;
+        //    Debug.Log("Fix your card assigner! It skips 2, which means in a thing groing from 0 to 3, you get 0, 1, 3, 4!!!!");
+        //}
+        foreach (GameObject card in inputDB.cards)
+        {
+            //Debug.Log("testing vs card in db of id " + card.GetComponent<Card>().CardID);
+            if (card.GetComponent<Card>().CardID == inputCardID)
+            {
+              //  Debug.Log("Card was found");
+                return card.transform.Find("PhysicalCard").transform.Find("CardBody").gameObject;
+            }
+        }
+        Debug.Log("[ERROR]: GetPhysicalCard() was unable to display card canvas due to unfound cardID: " + inputCardID);
+        Debug.Log("[ERROR RECOVERY] : returning blank dummy card for unfound cardID" + inputCardID);
+        return inputDB.dummyCard.transform.Find("PhysicalCard").transform.Find("CardBody").gameObject;
+    }
+
+    public static GameObject[] GetCardsOfTypeRarityLevelNation(Card.CARDTYPE type, Card.NAMERARITY rarity, Card.POWERLEVEL level, Card.NATIONTEAM nation, Card_DB_Manager inputDB)
+    {
+
+        List<GameObject> cardObjectsList = new List<GameObject>();
+        Debug.Log("List of all cards of type " + type + " , rarity " + rarity + " , level " + level + " , nation " + nation);
+        for (int i = 0; i < inputDB.cards.Length; i++)
+        {
+            Card objCard = inputDB.cards[i].GetComponent<Card>();
+            if (type == Card.CARDTYPE.NONE || type == objCard.type)
+            {
+                if (rarity == Card.NAMERARITY.NONE || rarity == objCard.rarity)
+                {
+                    if (level == Card.POWERLEVEL.NONE || level == objCard.level)
+                    {
+                        if (nation == objCard.nation)
+                        {
+                            cardObjectsList.Add(objCard.gameObject);
+                            Debug.Log(objCard.name);
+                        }
+                    }
+                }
+            }
+        }
+
+        GameObject[] cardObjectsArray = new GameObject[cardObjectsList.Count];
+        
+        for (int i = 0; i < cardObjectsArray.Length; i++)
+        {
+            cardObjectsArray[i] = cardObjectsList[i];
+            
+        }
+        return cardObjectsArray;
+    }
+
+    public static string GetCardName(uint inputCardID, Card_DB_Manager inputDB)
+    {
+        foreach (GameObject card in inputDB.cards)
+        {
+            if (card.GetComponent<Card>().CardID == inputCardID)
+            {
+                Debug.Log("Card name was found CardID" + inputCardID);
+                return card.name;
+            }
+        }
+        Debug.Log("[ERROR]: GetCardName() was unable to find cardID(" + inputCardID + ")");
+        return "NAME NOT FOUND";
+    }
+
+    public static void PlayCardPower(uint cardID, Card_DB_Manager inputDB)
+    {
+        Debug.Log("Card was played. cardID[" + cardID + " ]: " + Card_System.GetCardName(cardID, inputDB));
+
+        //instantate a card power effect here. (these should *self destruct* after committing their own behaviors
+        Instantiate(Card_System.GetCardPower(cardID, inputDB));
+
+    }
+
+    //Provides Cards graphic icon for use
+    public static Sprite GetCardIcon(uint inputCardID, Card_DB_Manager inputDB)
+    {
+        Sprite cardIcon = new Sprite();
+
+        foreach (GameObject card in inputDB.cards)
+        {
+            if (card.GetComponent<Card>().CardID == inputCardID)
+            {
+               // Debug.Log("[DEBUG]:Card Graphic was found for CardID: " + inputCardID);
+                cardIcon = card.transform.Find("PhysicalCard").transform.
+                                          Find("CardBody").
+                                          Find("ImageContainer").
+                                          Find("CardImage").GetComponent<Image>().sprite;
+                   
+                return cardIcon;
+            }
+        }
+        Debug.Log("[ERROR]: card graphic not found, replacing with Null Graphic");
+        cardIcon = inputDB.nullGraphic;
+        return cardIcon;
+    }
+
+    public static Card GetCardComponent(uint inputCardID, Card_DB_Manager inputDB)
+    {
+        Card cardcontainer;// = //new Card();
+        cardcontainer = null;
+        foreach (GameObject card in inputDB.cards)
+        {
+            if (card.GetComponent<Card>().CardID == inputCardID)
+            {
+                cardcontainer = card.GetComponent<Card>();            }
+        }
+        return cardcontainer;
+    }
+
+    //used to find trigger powers in game, returned as an acutal game object
+    public static GameObject GetCardPower(uint inputCardID, Card_DB_Manager inputDB)
+    {
+        Debug.Log("[DEBUG] : testing GetCardPower. searching for CardID: " + inputCardID);
+        foreach (GameObject card in inputDB.cards)
+        {
+            Debug.Log("Testing vs cardID of " + card.GetComponent<Card>().CardID);
+            if (card.GetComponent<Card>().CardID == inputCardID)
+            {
+                Debug.Log("Power was found");
+                return card.transform.Find("Power").gameObject;
+            }
+        }
+        Debug.Log("[ERROR]: GetCardPower() was unable to find Card Power due to unfound cardID");
+        return null;
+    }
+
+    public static void SelectMatchDeck()
+    {
+        Debug.Log("SelectMatchDeck() not yet coded");
+    }
+
+    //dropdown list function
+    public void SelectDecktoEdit()
+    {
+        //warning! if the deckIDs are not loaded in squence this will break the function!
+        // should seek an improvement for this eventually (may 12 2017)
+
+
+    }
+
+    //returns a deck that is shuffled up, not currently in use, may not be needed at all with random pulls
+    //function and therefore is on programing hold
+    public static DeckOfCards ShuffleDeck(DeckOfCards InputDeck)
+    {
+        CardSubs shuffledCards;
+        Debug.Log("warning! ShuffleDeck() is not functional!");
+
+        DeckOfCards shuffledDeck = InputDeck;
+        return shuffledDeck;
+    }
+
+    //pulls a card from a deck's pile
+    public static CardSubs PullRandomDeckCard(DeckOfCards InputDeck)
+    {
+
+        //check with all duplicates in a deck counted for range
+        //Debug.Log("cards count is " + (int)Card_System.GetCardsCount(InputDeck));
+        //int randomCard = UnityEngine.Random.Range(0, (int)Card_System.GetCardsCount(InputDeck) +1);
+        //return copy of that random card selection, subtract count for that card; 
+        //Debug.Log("Here you can see where you are missing assigning the 2 and end up with 0, 1, 3, 4!!!!");
+        foreach (CardSubs cardsub in InputDeck.DeckCards)  ////check everything before
+        {  
+            //Debug.Log("Card of id " + cardsub.cardID + " has amount on pull random " + cardsub.numberofDuplicates);
+        }
+        List<CardSubs> cardOptions = ConvertCardSubsToIndividuals(InputDeck);
+        int randomCard = UnityEngine.Random.Range(0, cardOptions.Count); //better to get the actual size and base it off of there
+        //Debug.Log("Got back cardoptions of length " + cardOptions.Count);
+        //Debug.Log("random card its selecting is " + randomCard);
+        CardSubs selectedCard = new CardSubs(cardOptions[randomCard].cardID, 1, 0);
+        //CardSubs selectedCard = cardOptions[randomCard]; 
+
+        //Debug.Log("Selected card has ID of " + selectedCard.cardID + " and has number of " + selectedCard.numberofDuplicates);
+        foreach (CardSubs cardsub in InputDeck.DeckCards)  //// double checking everything just to make sure the previous function didnt change things
+        {
+            //Debug.Log("Card of id " + cardsub.cardID + " has amount after pull random " + cardsub.numberofDuplicates);
+        }
+        // Debug.Log("[DEBUG] : got the random selected card : " + cardOptions[randomCard].cardID);
+        //warning, just because card was put into your hand, does not mean its been discarded!
+        // BUT if you dont discard it, you may dupe out the card a whole bunch! has to be discarded!
+        //return the card to the deck if it gets recycled or any other unusual behavior
+        //Debug.Log("Selected card has number of " + selectedCard.numberofDuplicates + " left before discard ");  ////shows the selected card amount before
+        DiscardCard(selectedCard.cardID, InputDeck);
+        //Debug.Log("Selected card has number of " + selectedCard.numberofDuplicates + " after discard ");  ////and after, note how its different
+        foreach (CardSubs cardsub in InputDeck.DeckCards)
+        {
+            //Debug.Log("Card of id " + cardsub.cardID + " has amount after pull random discard " + cardsub.numberofDuplicates);
+        }
+        // Debug.Log("[DEBUG] : discarded the card from the Deck ");
+        return selectedCard;
+
+    }
+
+    public static void DealCards(DeckOfCards InputDeck, DealtCards InputDeal)
+    {
+        //Debug.Log("[WARNING]: this function is still being tested and may have errors (jun.21.2017 DealCards()");
+        DealtCards tempDeal = new DealtCards();
+        //Debug.Log("Input deck stats before picking: size is " + GetCardsCount(InputDeck));
+        try
+        { // this chunk is for loops where there where cards already in hand being returned to deck
+          // tempDeal.cardsInDeal.AddRange(InputDeal.cardsInDeal);
+            tempDeal = new DealtCards(InputDeal);
+            //Debug.Log("[WARNING]: untested trigger chunk for adding cards to a deal after a hand returned cards to a deal");
+            //remember, the cards from the previous rounds hand will be moved back into the dealt pile,
+            //and any unplayed cards from the last round that have been dealt will still be there.
+            //for (int i = 0; i < DealtCards.arrayLength; i++)
+            for (int i = 0; i < InputDeal.cardsInDeal.Length; i++) //I have no idea why you would try to use something like that up there when you can just use .Length which will always be right 
+            {
+                //check if the slot is empty, check if theres any cards left to add
+                if (InputDeal.cardsInDeal[i] == null && GetCardsCount(InputDeck) >= 1)
+                {
+                    tempDeal.cardsInDeal[i] = (PullRandomDeckCard(InputDeck));
+                    //Debug.Log("Tempdeal card is " + tempDeal.cardsInDeal[i].cardID + " and is of amount " + tempDeal.cardsInDeal[i].numberofDuplicates);
+                }
+                else
+                {
+                    if (InputDeal.cardsInDeal[i] != null)
+                    {
+                        Debug.Log("Object already exists on draw, failing in DealCards");
+                    }
+                }
+            }
+           
+            InputDeal.cardsInDeal = tempDeal.cardsInDeal;
+        }
+        catch (NullReferenceException error)
+        {//this chunk is for when there where no cards in hand returned to deck
+            Debug.Log("VVV [ERROR CATCH]: No Cards in Deal yet, skipping temp deal injection VVV");
+            Debug.Log(" " + error);
+            for (int i = 0; i < 4; i++)
+            {
+                if (GetCardsCount(InputDeck) > 1)
+                {
+                    InputDeal.cardsInDeal[i]=(PullRandomDeckCard(InputDeck));
+                }
+            }
+        }
+        //Debug.Log("Input deck stats after picking: size is " + GetCardsCount(InputDeck));
+
+        
+    }
+
+    // used to return cards that are unplayed after a round, used in Rounds menu manager
+    public static void ReturnCardsToDeal(DealtCards inputDeal, PlayHand inputHand)
+    {
+        Debug.Log("[WARNING]: function has not been throughly tested and may have errors (21.05.2017: ReturnCardToDealtHand)");
+        Debug.Log("[DEBUG]: remember to have the WarPoint cost refunded to the player or some other way of compensating!");
+        //NOTE: cards have already been deducted from the deck itself with another function
+        // the cards are simply being cycled between hand and deal at this point
+        if (inputHand != null)
+        {
+            if (inputHand.cardsInHand != null)
+            {
+                PlayHand tempHand = inputHand;
+                //int i = 0;
+                for (int i = 0; i < inputHand.cardsInHand.Count; i++)
+                {
+                    tempHand.cardsInHand.Add(inputHand.cardsInHand[i]);
+                }
+                Debug.Log("tempHand is " + tempHand.cardsInHand.Count + " vs " + inputHand.cardsInHand.Count);
+                foreach(CardSubs subCard in tempHand.cardsInHand)
+                {
+                    inputHand.cardsInHand.Remove(subCard);
+                }
+                /*
+                foreach (CardSubs subCard in inputHand.cardsInHand)
+                {
+                    inputDeal.cardsInDeal[i] = (subCard);
+                    tempHand.cardsInHand.Remove(subCard); //FIXX
+                    i++;
+                }
+                inputHand = tempHand;
+                */
+            }
+            else
+            {
+                Debug.Log("Is null cards");
+            }
+        }
+        else
+        {
+            Debug.Log("inputhand is null");
+        }
+        //Debug.Log("Size of returned inputdeal is " + inputDeal.cardsInDeal.Length);
+        
+    }
+   
+    // moves a card from deal to hand (RMM)
+    public static void AddCardToHand(int dealPos, PlayHand inputHand, DealtCards inputDeal)
+    {
+       // Debug.Log("[WARNING]: function has not beeng throughly tested and may have errors(21.05.2017 addCardToHand) ");
+        inputHand.cardsInHand.Add(inputDeal.cardsInDeal[dealPos]);
+        inputDeal.cardsInDeal[dealPos] = null;
+        //inputDeal.cardsInDeal.Remove(inputDeal.cardsInDeal[dealPos]);
+        
+    }
+    // moves card from hand to deal (RMM)
+    public static void AddCardToDeal(int dealPos, int handPos, DealtCards inputDeal, PlayHand inputHand)
+    {
+      
+        Debug.Log("[WARNING]: function has not beeng throughly tested and may have errors(21.05.2017 addCardToDeal) ");
+        Debug.Log("Recorded Deal Position: " + dealPos);
+        Debug.Log("Recorded card / Hand position: " + handPos);
+        Debug.Log("newly aquired card in deal is: " + inputHand.cardsInHand[handPos].cardID);
+        inputDeal.cardsInDeal[dealPos] = inputHand.cardsInHand[handPos];
+        inputHand.cardsInHand.Remove(inputHand.cardsInHand[handPos]);
+    }
+
+    //kick out of available Dealt cards
+    public void DiscardDealtCard()
+    { }
+
+    public void PlayCard()
+    { }
+
+    //reducts total available card count
+    public static void DiscardCard(uint inputCardID, DeckOfCards inputDeck)
+    {
+        foreach (CardSubs card in inputDeck.DeckCards)
+        {
+            if (card.cardID == inputCardID)
+            {
+                //Debug.Log("Card amount of " + card.cardID + " is " + card.numberofDuplicates);
+                card.numberDiscarded++;
+                card.numberofDuplicates--;
+                if (card.numberofDuplicates < 0)
+                {
+                    Debug.Log("[ERROR] : card to discard has gone into negative values in deck! " + card.cardID);
+                }
+                return;
+            }
+        }
+        Debug.Log("[ERROR] : DiscardCard() was unable to find input cardID! " + inputCardID);
+    }
+
+    //move to Rounds_menu_manager
+    public void SetCardOnBuilding()
+    { }
+    //return all used cards to deck
+    public void ResetDeck()
+    { }
+
+    /*functions on indefinite hold
+
+      public void CreateNewDeck(){}
+      public void DeleteDeck(){}
+      public void ReOrderDeck(){}
+
+      */
+    // search function for "search for deck via text"
+    //compares the input name to the deck names (NOT IN USE AS OF MAY10)
+    /* public void SearchForDeckbyName(string inputName)
+     {
+
+         //create new canvas or pannel container or whatever, endable disable, whatever works
+         SearchListPanelRef.gameObject.SetActive(true);
+         for (int i = 0; i < deckCollection.Decks.Count; i++)
+         {
+
+             //note: string input for test is "Deck" deck count is 3, each is named Deck0,Deck1,Deck2
+             Debug.Log("total number of decks: " + deckCollection.Decks.Count);
+             string searchCaps = inputName.ToUpper();
+             string deckCaps = deckCollection.Decks[i].deckName.ToUpper();
+             Debug.Log("comparing Deck input " + searchCaps + " to " + deckCaps);
+             bool containsString = (deckCaps.Contains(searchCaps) || deckCaps.Equals(searchCaps));
+
+             if (containsString)
+             {
+                 //stuff
+             }
+         }
+
+         Invoke("CloseSearchListPanel", 5);
+     } */
+}
